@@ -280,10 +280,29 @@ function parseVol(v){
 
 // Extract yyyy-MM-ddTHH:mm from filename
 function tsFromFilename(name){
-  var m=name.match(/(\d{4}-\d{2}-\d{2})[T_ ](\d{2})[:\-h](\d{2})/);
-  if(m) return m[1]+'T'+m[2]+':'+m[3];
-  m=name.match(/(\d{4})(\d{2})(\d{2})[T_ ]?(\d{2})[:\-h]?(\d{2})/);
-  if(m) return m[1]+'-'+m[2]+'-'+m[3]+'T'+m[4]+':'+m[5];
+  // Remove extension
+  var n=name.replace(/\.[^.]+$/,'');
+
+  // Log what we're trying to parse (for debug)
+  console.log('[tsFromFilename] parsing:', n);
+
+  // 2026-03-05_15:30  |  2026-03-05_15-30  |  2026-03-05T15:30  |  2026-03-05 15:30
+  var m=n.match(/(\d{4}-\d{2}-\d{2})[T_ ](\d{2})[:\-hH](\d{2})/);
+  if(m){ console.log('[tsFromFilename] matched pattern 1:', m[1]+'T'+m[2]+':'+m[3]); return m[1]+'T'+m[2]+':'+m[3]; }
+
+  // 2026-03-05_1530 (time without separator)
+  m=n.match(/(\d{4}-\d{2}-\d{2})[T_ ](\d{2})(\d{2})$/);
+  if(m){ console.log('[tsFromFilename] matched pattern 2'); return m[1]+'T'+m[2]+':'+m[3]; }
+
+  // 20260305_1530 or 20260305T1530
+  m=n.match(/(\d{4})(\d{2})(\d{2})[T_ \-](\d{2})[:\-]?(\d{2})/);
+  if(m){ console.log('[tsFromFilename] matched pattern 3'); return m[1]+'-'+m[2]+'-'+m[3]+'T'+m[4]+':'+m[5]; }
+
+  // Only date: 2026-03-05
+  m=n.match(/(\d{4}-\d{2}-\d{2})/);
+  if(m){ console.log('[tsFromFilename] matched date only'); return m[1]+'T12:00'; }
+
+  console.log('[tsFromFilename] no match found');
   return null;
 }
 
@@ -407,6 +426,7 @@ function buildRoutes(rows,fname){
   });
 
   currentTs=tsFromFilename(fname)||new Date().toISOString().substring(0,16);
+  console.log('[buildRoutes] currentTs:', currentTs, '| fname:', fname);
 
   // File pill
   var shortName=fname.length>30?fname.substr(0,27)+'…':fname;
