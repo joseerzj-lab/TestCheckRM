@@ -464,42 +464,71 @@ function linearExp(h){
   return Math.max(0,Math.min(100,(h-JORNADA_START)/(JORNADA_END-JORNADA_START)*100));
 }
 
+// ════════════════════════════════════════════════════════
+// MODELO: ventana deslizante ±20 min × similitud de complejidad
+// Para cada consulta busca observaciones históricas dentro de
+// ±20 min de esa hora, ponderadas por cercanía temporal y CX.
+// Fallback a ±40 min si hay pocas muestras. Sin muestras → baseline.
+// ════════════════════════════════════════════════════════
+
+var WINDOW_MIN  = 20/60;   // ±20 min en horas (ventana exacta)
+var WINDOW_WIDE = 40/60;   // ±40 min fallback
+var MIN_SAMPLES = 3;       // mínimo para confiar en la ventana
+
 function modelExp(patente,h,cx){
   var lin=linearExp(h);
   if(h===null) return {exp:null,src:'—',n:0};
   if(!model.snapshots.length) return {exp:lin!==null?Math.round(lin*10)/10:null,src:'baseline',n:0};
 
-  // Global only: all vehicles at similar hour + complexity
-  var globSamp=[];
-  model.snapshots.forEach(function(snap){
-    var sh=hourOf(snap.ts); if(sh===null) return;
-    var diff=Math.abs(sh-h); if(diff>2) return;
-    var w=1/(1+diff);
-    snap.routes.forEach(function(r){
-      var cxDiff=Math.abs((r.cx||0)-cx);
-      var ws=w*(1/(1+cxDiff*2));
-      globSamp.push({pct:r.pct,w:ws});
+  // Recopilar todas las observaciones del historial con pesos
+  function getSamples(windowH){
+    var samps=[];
+    model.snapshots.forEach(function(snap){
+      var sh=hourOf(snap.ts); if(sh===null) return;
+      var diffH=Math.abs(sh-h);
+      if(diffH>windowH) return;
+      snap.routes.forEach(function(r){
+        // Peso temporal: gaussiano sobre la ventana (más cerca = más peso)
+        var wTime=Math.exp(-(diffH*diffH)/(2*(windowH/2)*(windowH/2)));
+        // Peso por similitud de complejidad (cx)
+        var cxDiff=Math.abs((r.cx||0)-cx);
+        var wCx=Math.exp(-(cxDiff*cxDiff)/0.08);  // sigma ~0.28 en cx
+        samps.push({pct:r.pct, w:wTime*wCx, diffH:diffH});
+      });
     });
-  });
+    return samps;
+  }
 
-  function wavg(arr){
-    if(!arr.length) return null;
+  function wavg(samps){
+    if(!samps.length) return null;
     var sw=0,swp=0;
-    arr.forEach(function(s){sw+=s.w;swp+=s.w*s.pct;});
+    samps.forEach(function(s){sw+=s.w;swp+=s.w*s.pct;});
     return sw>0?swp/sw:null;
   }
 
-  var gAvg=wavg(globSamp);
-  var exp,src,n;
-  if(gAvg!==null){
-    // Blend model + linear baseline (more model weight as snapshots grow)
-    var mw=Math.min(0.8,0.3+model.snapshots.length*0.05);
-    exp=gAvg*mw+lin*(1-mw);
-    src='modelo';n=globSamp.length;
+  var samps=getSamples(WINDOW_MIN);
+  var src,n;
+
+  if(samps.length>=MIN_SAMPLES){
+    src='modelo'; n=samps.length;
   } else {
-    exp=lin;src='baseline';n=0;
+    // Ampliar a ±40 min
+    samps=getSamples(WINDOW_WIDE);
+    if(samps.length>0){
+      src='aprox'; n=samps.length;
+    } else {
+      return {exp:Math.round(lin*10)/10,src:'baseline',n:0};
+    }
   }
-  return {exp:Math.round(exp*10)/10,src:src,n:n};
+
+  var modelAvg=wavg(samps);
+  if(modelAvg===null) return {exp:Math.round(lin*10)/10,src:'baseline',n:0};
+
+  // Blend modelo + baseline. Peso del modelo crece con nº de muestras.
+  var mw=Math.min(0.88, 0.35 + n*0.06);
+  var exp=modelAvg*mw + lin*(1-mw);
+
+  return {exp:Math.round(exp*10)/10, src:src, n:n};
 }
 
 function riskLevel(actual,exp,cx){
@@ -520,20 +549,10 @@ function riskTags(r,actual,exp,cx){
   if(r.vol>3)     tags.push({t:'Volumen alto ('+r.vol.toFixed(2)+' m³)',c:'o'});
   if(r.pos>8)     tags.push({t:r.pos+' ParentOrders distintos',c:'o'});
   if(r.total>50)  tags.push({t:'Ruta extensa ('+r.total+' órdenes)',c:'o'});
-  if(r.pend>0)    tags.push({t:r.pend+' órdenes pendientes',c:'o'});
+  if(r.pend>0)    tags.push({t:r.pend+' pendientes',c:'o'});
   if(cx>0.65)     tags.push({t:'Complejidad alta ('+Math.round(cx*100)+'%)',c:'r'});
   if(r.enruta>0)  tags.push({t:r.enruta+' en ruta ahora',c:'g'});
   return tags;
-}
-
-function getHistory(patente){
-  var h=[];
-  model.snapshots.forEach(function(s){
-    s.routes.forEach(function(r){
-      if(r.patente===patente) h.push({ts:s.ts,pct:r.pct});
-    });
-  });
-  return h.sort(function(a,b){return a.ts.localeCompare(b.ts);});
 }
 
 // ════════════════════════════════════════════════════════
@@ -615,7 +634,7 @@ function renderAnalisis(){
   }
 
   var srcLabel=model.snapshots.length
-    ?'🧠 modelo ('+model.snapshots.length+' snaps)'
+    ?'🧠 ventana ±20 min ('+model.snapshots.length+' snaps)'
     :'📏 baseline lineal';
 
   var html='';
@@ -655,27 +674,11 @@ function renderCard(r,pred,exp,risk){
       '<div class="prog-marker-lbl" style="color:'+mc+'">'+expD+'%</div></div>';
   }
 
-  var srcIcon={'modelo':'🧠','global':'📊','baseline':'📏'}[pred.src]||'';
-  var srcTxt=expD!==null?(srcIcon+' esperado: '+expD+'%'+(pred.n?' · '+pred.n+' muestras':'')):'sin modelo';
+  var srcIcon={'modelo':'🧠','aprox':'📊','baseline':'📏'}[pred.src]||'';
+  var srcTxt=expD!==null?(srcIcon+' esperado: '+expD+'%'+(pred.n?' · '+pred.n+' obs.':'')):'sin datos';
 
   var tags=exp!==null?riskTags(r,r.pct,exp,r.cx):[];
   var tagsHtml=tags.map(function(t){return '<span class="rtag rt-'+t.c+'">'+escH(t.t)+'</span>';}).join('');
-
-  var hist=getHistory(r.patente);
-  var sparkHtml='';
-  if(hist.length>=2){
-    var maxP=Math.max.apply(null,hist.map(function(h){return h.pct;}));
-    var bars=hist.slice(-12).map(function(h){
-      var hh=Math.max(3,Math.round(h.pct/(maxP||1)*18));
-      var bc=h.pct>=80?'var(--green)':h.pct>=40?'var(--orange)':'var(--red)';
-      return '<div class="sbar" style="height:'+hh+'px;background:'+bc+'" title="'+escH(fmtTs(h.ts))+': '+Math.round(h.pct)+'%"></div>';
-    }).join('');
-    sparkHtml='<div class="spark-row">'+
-      '<span class="spark-lbl">historial</span>'+
-      '<div class="spark-bars">'+bars+'</div>'+
-      '<span style="font-size:9px;color:var(--muted);font-family:var(--mono)">'+hist.length+' snaps</span>'+
-    '</div>';
-  }
 
   return '<div class="rcard '+risk+'">'+
     '<div class="rc-head">'+
@@ -705,7 +708,6 @@ function renderCard(r,pred,exp,risk){
         '<div class="chip"><div class="ch-v">'+r.vol.toFixed(2)+'</div><div class="ch-l">Vol m³</div></div>'+
       '</div>'+
       (tagsHtml?'<div class="risk-row">'+tagsHtml+'</div>':'')+
-      (sparkHtml||'')+
     '</div>'+
   '</div>';
 }
