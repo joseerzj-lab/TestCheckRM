@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Limpiador Ikea</title>
+<title>Limpiador IKEA</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
@@ -286,7 +286,7 @@ body::before{
 <div class="card">
   <div class="card-header">
     <div class="logo-box">
-      <!-- Ikea-style logo -->
+      <!-- IKEA-style logo -->
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <rect x="3" y="6" width="18" height="12" rx="2" fill="#0051BA"/>
         <text x="12" y="15" font-size="7" font-weight="800" font-family="monospace" fill="#FFDA1A" text-anchor="middle">IKE</text>
@@ -294,7 +294,7 @@ body::before{
     </div>
     <div class="header-text">
       <h1>Limpiador de Rutas</h1>
-      <p>Filtro Ikea · RM · Sin patente vacía</p>
+      <p>Filtro IKEA · RM · Sin patente vacía</p>
     </div>
   </div>
 
@@ -305,7 +305,7 @@ body::before{
       ondragover="event.preventDefault();this.classList.add('drag')"
       ondragleave="this.classList.remove('drag')"
       ondrop="onDrop(event)">
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="onFileSelect(this)">
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv,.txt" onchange="onFileSelect(this)">
       <div class="drop-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
           <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
@@ -314,7 +314,7 @@ body::before{
         </svg>
       </div>
       <div class="drop-label">Arrastra el archivo o haz clic</div>
-      <div class="drop-sub">.xlsx · .xls · .csv</div>
+      <div class="drop-sub">.xlsx · .xls · .csv · .txt</div>
     </div>
 
     <!-- File loaded info -->
@@ -378,7 +378,7 @@ body::before{
 <script>
 // ─── Constants ───────────────────────────────────────────────────────────────
 var REQUIRED_COLS = ['Estado','Patente','Region','Volumen','LPN','Commerce','ParentOrder'];
-var TARGET_COMMERCE = 'Ikea';  // case-insensitive match
+var TARGET_COMMERCE = 'ikea';  // case-insensitive match
 
 // ─── State ───────────────────────────────────────────────────────────────────
 var _file = null;
@@ -445,7 +445,12 @@ function handleFile(file){
         rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:''});
       } else {
         var text = e.target.result;
+        // detect separator before parsing
+        var first = text.split(/\r?\n/)[0]||'';
+        var tabs=(first.match(/\t/g)||[]).length, semis=(first.match(/;/g)||[]).length, commas=(first.match(/,/g)||[]).length;
+        var detectedSep = tabs>=semis&&tabs>=commas?'TAB':semis>=commas?';':',';
         rows = parseCSV(text);
+        log('Separador detectado: "'+detectedSep+'"', 'info');
       }
       _rawRows = rows;
       _headers = rows.length ? Object.keys(rows[0]) : [];
@@ -469,8 +474,12 @@ function handleFile(file){
 function parseCSV(text){
   var lines = text.split(/\r?\n/).filter(Boolean);
   if(!lines.length) return [];
-  // detect separator
-  var sep = (lines[0].match(/\t/g)||[]).length > (lines[0].match(/,/g)||[]).length ? '\t' : ',';
+  // detect separator: check tab, semicolon, comma
+  var first = lines[0];
+  var tabs   = (first.match(/\t/g)||[]).length;
+  var semis  = (first.match(/;/g)||[]).length;
+  var commas = (first.match(/,/g)||[]).length;
+  var sep = tabs >= semis && tabs >= commas ? '\t' : semis >= commas ? ';' : ',';
   var headers = splitCSVLine(lines[0], sep);
   return lines.slice(1).map(function(l){
     var vals = splitCSVLine(l, sep);
@@ -570,13 +579,13 @@ function procesar(){
 
   log('Columnas mapeadas correctamente ✓', 'ok');
 
-  // Filter 1: Commerce = Ikea
+  // Filter 1: Commerce = IKEA
   var step1 = _rawRows.filter(function(r){
     var v = (r[colActual['Commerce']]||'').trim();
     return norm(v) === TARGET_COMMERCE;
   });
   var removedCommerce = total - step1.length;
-  log('Filtro Commerce=Ikea: eliminadas '+removedCommerce+' filas ('+step1.length+' quedan)', removedCommerce>0?'warn':'ok');
+  log('Filtro Commerce=IKEA: eliminadas '+removedCommerce+' filas ('+step1.length+' quedan)', removedCommerce>0?'warn':'ok');
 
   // Filter 2: Patente no vacía
   var step2 = step1.filter(function(r){
